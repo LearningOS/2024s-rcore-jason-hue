@@ -22,6 +22,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+use crate::timer::get_time_ms;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -45,8 +46,15 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    current_time: usize,
 }
-
+impl TaskManagerInner {
+    fn update_time(&mut self) -> usize {
+        let start_time = self.current_time;
+        self.current_time = get_time_ms();
+        self.current_time - start_time
+    }
+}
 lazy_static! {
     /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
@@ -54,6 +62,9 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_times: [0;500],
+            user_time: 0,
+            kernel_time: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -65,6 +76,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    current_time: 0,
                 })
             },
         }
@@ -81,6 +93,7 @@ impl TaskManager {
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
+        inner.update_time();
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
@@ -94,6 +107,7 @@ impl TaskManager {
     fn mark_current_suspended(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
+        inner.tasks[current].kernel_time += inner.update_time();
         inner.tasks[current].task_status = TaskStatus::Ready;
     }
 
@@ -101,6 +115,7 @@ impl TaskManager {
     fn mark_current_exited(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
+        inner.tasks[current].kernel_time += inner.update_time();
         inner.tasks[current].task_status = TaskStatus::Exited;
     }
 
@@ -135,6 +150,18 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    fn user_time_start(&self) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].kernel_time += inner.update_time();
+    }
+
+    /// 统计用户时间，从现在开始算的是内核时间
+    fn user_time_end(&self) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].user_time += inner.update_time();
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +195,20 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+pub fn get_current_task_block() -> TaskControlBlock {
+    let inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    inner.tasks[current].clone()
+}
+pub fn update_task_syscall_times(sys_id: usize){
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    inner.tasks[current].syscall_times[sys_id] += 1;
+}
+pub fn user_time_start() {
+    TASK_MANAGER.user_time_start()
+}
+pub fn user_time_end() {
+    TASK_MANAGER.user_time_end()
 }
