@@ -6,7 +6,7 @@ use crate::{
     },
 };
 use crate::mm::translate_struct_ptr;
-use crate::task::{current_user_token, get_current_task_block, select_cur_task_to_mmap, select_cur_task_to_munmap};
+use crate::task::{current_user_token, get_current_task_block, get_sys_call_times, select_cur_task_to_mmap, select_cur_task_to_munmap, update_task_syscall_times};
 use crate::timer::{get_time_ms, get_time_us};
 
 #[repr(C)]
@@ -63,12 +63,14 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    let task_block = get_current_task_block();
+    //let task_block = get_current_task_block();
     let ti = translate_struct_ptr(current_user_token(),_ti);
     unsafe {
         *ti = TaskInfo{
-            status: task_block.task_status,
-            syscall_times: task_block.syscall_times,
+            //status: task_block.task_status,
+            status: TaskStatus::Running,
+            //syscall_times: task_block.syscall_times,
+            syscall_times: get_sys_call_times(),
             time: get_time_ms(),
         };
         return 0;

@@ -23,6 +23,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+use crate::config::MAX_SYSCALL_NUM;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -153,6 +154,10 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    fn get_sys_call_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        inner.tasks[inner.current_task].syscall_times.clone()
+    }
 }
 
 /// Run the first task in task list.
@@ -223,4 +228,7 @@ pub fn select_cur_task_to_munmap(start: usize, len: usize) -> isize {
     let mut inner = TASK_MANAGER.inner.exclusive_access();
     let current = inner.current_task;
     inner.tasks[current].memory_set.unmmap(start,len)
+}
+pub fn get_sys_call_times() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_sys_call_times()
 }
