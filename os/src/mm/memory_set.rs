@@ -34,9 +34,11 @@ lazy_static! {
         Arc::new(unsafe { UPSafeCell::new(MemorySet::new_kernel()) });
 }
 /// address space
+#[derive(Clone)]
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
+    map_frames: BTreeMap<VirtPageNum,FrameTracker>
 }
 
 impl MemorySet {
@@ -45,6 +47,7 @@ impl MemorySet {
         Self {
             page_table: PageTable::new(),
             areas: Vec::new(),
+            map_frames: BTreeMap::new(),
         }
     }
     /// Get the page table token
@@ -262,8 +265,73 @@ impl MemorySet {
             false
         }
     }
+    pub fn mmap(&mut self,start: usize,len: usize,port: usize)->isize{
+        let va_start: VirtAddr = start.into();
+        if !va_start.aligned() {
+            return -1;
+        }
+        let mut vpn_start = VirtPageNum::from(va_start);
+
+        let mut flags = PTEFlags::from_bits(port as u8).unwrap();
+        if port & 0b0000_0001 != 0 {
+            flags |= PTEFlags::R;
+        }
+
+        if port & 0b0000_0010 != 0 {
+            flags |= PTEFlags::W;
+        }
+
+        if port & 0b0000_0100 != 0 {
+            flags |= PTEFlags::X;
+        }
+        flags |= PTEFlags::U;
+        flags |= PTEFlags::V;
+        let va_end: VirtAddr = (start+len).into();
+        let va_end = va_end.ceil();
+        while vpn_start != va_end {
+            if let Some(pte) = self.page_table.translate(vpn_start) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+            if let Some(ppn) = frame_alloc() {
+                self.page_table.map(vpn_start, ppn.ppn, flags);
+                self.map_frames.insert(vpn_start, ppn);
+            } else {
+                return -1;
+            }
+            vpn_start.step();
+        }
+        0
+    }
+    pub fn unmmap(&mut self, start: usize, len: usize) -> isize {
+        let va_start: VirtAddr = start.into();
+        if !va_start.aligned() {
+            return -1;
+        }
+        let mut vpn_start: VirtPageNum = va_start.into();
+
+        let va_end: VirtAddr = (start + len).into();
+        let va_end: VirtPageNum = va_end.ceil();
+
+        while vpn_start != va_end {
+            if let Some(item) = self.page_table.translate(vpn_start) {
+                if !item.is_valid() {
+                    debug!("unmap on no map vpn");
+                    return -1;
+                }
+            } else {
+                return -1;
+            }
+            self.page_table.unmap(vpn_start);
+            self.map_frames.remove(&vpn_start);
+            vpn_start.step();
+        }
+        0
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
+#[derive(Clone)]
 pub struct MapArea {
     vpn_range: VPNRange,
     data_frames: BTreeMap<VirtPageNum, FrameTracker>,
